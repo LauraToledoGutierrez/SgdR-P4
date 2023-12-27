@@ -358,8 +358,5 @@ func main() {
 	router.POST("/userdir", userDir.post)
 
 	//MIRAR ESTO MEJOR
-	err := router.RunTLS(":443", "path/to/cert.pem", "path/to/key.pem")
-	if err != nil {
-		log.Fatal("Failed to start HTTPS server: ", err)
-	}
+	log.Fatal(router.RunTLS(":443", CERT, KEY))
 }

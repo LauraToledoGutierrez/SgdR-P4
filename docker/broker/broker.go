@@ -2,379 +2,287 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-//go get github.com/dgrijalva/jwt-go
-//go get github.com/gin-gonic/gin
-//go get github.com/google/uuid
-
+// Constantes y variables globales
 const (
-	VERSION         = "v1.0.0"
-	USERS_PATH      = "users/"
-	SHADOW_FILE     = ".shadow"
-	TIME_EXPIRATION = 5
-	// FALTA PONER CERTIFICADO
-	CERT = ""
-
+	VERSION      = "v1.0.0"
+	IP_HOST      = "10.0.1.4"
+	PORT         = "5000"
 	FILES_SERVER = "https://10.0.2.4:5000"
-	AUTH_SERVER  = "https://10.0.2.3:5000/"
-	KEY          = "b70a82b92875605defbeda92cfdabf0362aa4cac8e784b6445f2726a8a54abc0"
+	FILES_CERT   = "certs/file-cert.ssl.crt"
+	AUTH_SERVER  = "https://10.0.2.3:5000"
+	AUTH_CERT    = "certs/auth-cert.ssl.crt"
+	CERT_PEM     = "certs/broker-cert.ssl.crt"
+	KEY_PEM      = "keys/broker-key.ssl.key"
+	USERS        = "users/"
+	MINUTES      = 5
 )
 
 var TOKENS_DICT = make(map[string]string)
+
+type Credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
 
 type Signup struct{}
 type Login struct{}
 type Version struct{}
 type User struct{}
 type Docs struct{}
-type UserDir struct{}
 
-// Check the authorization header for a valid token
-func checkAuthorizationHeader(c *gin.Context, userID string) string {
-	// Get the Authorization header from the request
+func checkAuthorizationHeader(c *gin.Context) string {
 	authHeader := c.GetHeader("Authorization")
-
 	if authHeader == "" {
-		c.JSON(400, gin.H{"error": "Authorization header must be: token <user-auth-token>"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Authorization header is required"})
 		return ""
 	}
-	headerParts := strings.Split(authHeader, "")
+	headerParts := strings.Split(authHeader, " ")
 	if len(headerParts) != 2 || headerParts[0] != "token" {
-		c.JSON(400, gin.H{"message": "Authorization header must be: token <user-auth-token>"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Authorization header must be: token <user-auth-token"})
 		return ""
 	}
 	return headerParts[1]
 }
 
-func (v *Version) version(c *gin.Context) {
+func createTLSClient(certFile string) (*http.Client, error) {
+	caCert, err := ioutil.ReadFile(certFile)
+	if err != nil {
+		return nil, err
+	}
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(caCert)
+	tlsConfig := &tls.Config{RootCAs: caCertPool}
+	return &http.Client{
+		Transport: &http.Transport{TLSClientConfig: tlsConfig},
+		Timeout:   10 * time.Second,
+	}, nil
+}
+
+func makeHTTPRequest(client *http.Client, method, url string, token string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+token)
+	req.Header.Set("Content-Type", "application/json")
+	return client.Do(req)
+}
+
+func handleHTTPResponse(c *gin.Context, resp *http.Response) {
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		var result map[string]interface{}
+		if err := json.Unmarshal(body, &result); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	} else {
+		var errorResponse map[string]interface{}
+		if err := json.Unmarshal(body, &errorResponse); err == nil {
+			c.JSON(resp.StatusCode, errorResponse)
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error processing response"})
+		}
+	}
+}
+
+func (v *Version) get(c *gin.Context) {
 	c.JSON(200, gin.H{"version": VERSION})
 }
 
 func (s *Signup) post(c *gin.Context) {
-	var jsonInput map[string]string
-	if err := c.BindJSON(&jsonInput); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+	var jsonReq map[string]string
+	if err := c.BindJSON(&jsonReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Aquí, jsonInput["username"] y jsonInput["password"] contienen los datos del usuario
+	requestData, _ := json.Marshal(jsonReq)
 
-	jsonData, err := json.Marshal(jsonInput)
+	client, err := createTLSClient(AUTH_CERT)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error encoding JSON"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	resp, err := http.Post(AUTH_SERVER, "application/json", bytes.NewBuffer(jsonData))
+	resp, err := makeHTTPRequest(client, "POST", AUTH_SERVER, "", requestData)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send request to auth server"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		var respError map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&respError); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode response from auth server"})
-			return
-		}
-		c.JSON(resp.StatusCode, respError)
-		return
-	}
-
-	var respData map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode response from auth server"})
-		return
-	}
-
-	c.JSON(http.StatusOK, respData)
+	handleHTTPResponse(c, resp)
 }
 
 func (l *Login) post(c *gin.Context) {
-	var jsonInput map[string]string
-	if err := c.BindJSON(&jsonInput); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+	var loginData struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+
+	if err := c.BindJSON(&loginData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	jsonData, err := json.Marshal(jsonInput)
+	// Convertir datos de login a JSON para la petición
+	requestData, err := json.Marshal(loginData)
+	client, err := createTLSClient(AUTH_CERT)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error encoding JSON"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	resp, err := http.Post(AUTH_SERVER, "application/json", bytes.NewBuffer(jsonData))
+	resp, err := makeHTTPRequest(client, "GET", AUTH_SERVER, "", requestData)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send request to auth server"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		var respError map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&respError); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode response from auth server"})
-			return
-		}
-		c.JSON(resp.StatusCode, respError)
-		return
-	}
-
-	var respData map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode response from auth server"})
-		return
-	}
-
-	c.JSON(http.StatusOK, respData)
+	handleHTTPResponse(c, resp)
 }
 
 func (u *User) get(c *gin.Context) {
-	userID := c.Param("user_id")
-	docID := c.Param("doc_id")
+	user_id := c.Param("user_id")
+	doc_id := c.Param("doc_id")
 
-	token := checkAuthorizationHeader(c, userID)
+	token := checkAuthorizationHeader(c)
 
-	// Realizar la solicitud GET al servidor de archivos
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", FILES_SERVER+"/"+userID+"/"+docID, nil)
+	client, err := createTLSClient(FILES_CERT)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create request"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	req.Header.Add("Authorization", "token "+token)
-	resp, err := client.Do(req)
+	resp, err := makeHTTPRequest(client, "GET", FILES_SERVER+"/"+user_id+"/"+doc_id, token, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send request to file server"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		var respError map[string]interface{}
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil || json.Unmarshal(body, &respError) != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse error response from file server"})
-			return
-		}
-		c.JSON(resp.StatusCode, respError)
-		return
-	}
-
-	var respData map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode response from file server"})
-		return
-	}
-
-	c.JSON(http.StatusOK, respData)
+	handleHTTPResponse(c, resp)
 }
 
 func (u *User) post(c *gin.Context) {
-	userID := c.Param("user_id")
-	docID := c.Param("doc_id")
-
-	token := checkAuthorizationHeader(c, userID)
-
-	var jsonInput map[string]interface{}
-	if err := c.BindJSON(&jsonInput); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON format"})
+	user_id := c.Param("user_id")
+	doc_id := c.Param("doc_id")
+	token := checkAuthorizationHeader(c)
+	var jsonReq map[string]interface{}
+	if err := c.BindJSON(&jsonReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	docContent, exists := jsonInput["doc_content"]
-	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "doc_content is required"})
-		return
-	}
-
-	jsonData, err := json.Marshal(docContent)
+	requestData, err := json.Marshal(jsonReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error encoding JSON"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	client, err := createTLSClient(FILES_CERT)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Realizar la solicitud POST al servidor de archivos
-	client := &http.Client{}
-	req, err := http.NewRequest("POST", FILES_SERVER+"/"+userID+"/"+docID, bytes.NewBuffer(jsonData))
+	resp, err := makeHTTPRequest(client, "POST", FILES_SERVER+"/"+user_id+"/"+doc_id, token, requestData)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create request"})
-		return
-	}
-
-	req.Header.Add("Authorization", "token "+token)
-	req.Header.Add("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send request to file server"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		var respError map[string]interface{}
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil || json.Unmarshal(body, &respError) != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse error response from file server"})
-			return
-		}
-		c.JSON(resp.StatusCode, respError)
-		return
-	}
-
-	var respData map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode response from file server"})
-		return
-	}
-
-	c.JSON(http.StatusOK, respData)
+	handleHTTPResponse(c, resp)
 }
-
 func (u *User) put(c *gin.Context) {
-	userID := c.Param("user_id")
-	docID := c.Param("doc_id")
+	user_id := c.Param("user_id")
+	doc_id := c.Param("doc_id")
+	token := checkAuthorizationHeader(c)
 
-	token := checkAuthorizationHeader(c, userID)
-
-	var jsonInput map[string]interface{}
-	if err := c.BindJSON(&jsonInput); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON format"})
+	var jsonReq map[string]interface{}
+	if err := c.BindJSON(&jsonReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	docContent, exists := jsonInput["doc_content"]
-	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "doc_content is required"})
-		return
-	}
-
-	jsonData, err := json.Marshal(docContent)
+	requestData, err := json.Marshal(jsonReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error encoding JSON"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	client, err := createTLSClient(FILES_CERT)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Realizar la solicitud PUT al servidor de archivos
-	client := &http.Client{}
-	req, err := http.NewRequest("PUT", FILES_SERVER+"/"+userID+"/"+docID, bytes.NewBuffer(jsonData))
+	resp, err := makeHTTPRequest(client, "PUT", FILES_SERVER+"/"+user_id+"/"+doc_id, token, requestData)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create request"})
-		return
-	}
-
-	req.Header.Add("Authorization", "token "+token)
-	req.Header.Add("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send request to file server"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		var respError map[string]interface{}
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil || json.Unmarshal(body, &respError) != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse error response from file server"})
-			return
-		}
-		c.JSON(resp.StatusCode, respError)
-		return
-	}
-
-	var respData map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode response from file server"})
-		return
-	}
-
-	c.JSON(http.StatusOK, respData)
+	// Leer y manejar la respuesta
+	handleHTTPResponse(c, resp)
 }
 
 func (u *User) delete(c *gin.Context) {
-	userID := c.Param("user_id")
-	docID := c.Param("doc_id")
+	user_id := c.Param("user_id")
+	doc_id := c.Param("doc_id")
+	token := checkAuthorizationHeader(c)
 
-	token := checkAuthorizationHeader(c, userID)
-
-	// Realizar la solicitud DELETE al servidor de archivos
-	client := &http.Client{}
-	req, err := http.NewRequest("DELETE", FILES_SERVER+"/"+userID+"/"+docID, nil)
+	client, err := createTLSClient(FILES_CERT)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create request"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	req.Header.Add("Authorization", "token "+token)
-
-	resp, err := client.Do(req)
+	resp, err := makeHTTPRequest(client, "DELETE", FILES_SERVER+"/"+user_id+"/"+doc_id, token, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send request to file server"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error en Auth Server"})
-		return
-	}
-
-	var respData map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode response from file server"})
-		return
-	}
-
-	c.JSON(http.StatusOK, respData)
+	handleHTTPResponse(c, resp)
 }
-
 func (d *Docs) get(c *gin.Context) {
-	userID := c.Param("user_id")
+	user_id := c.Param("user_id")
+	token := checkAuthorizationHeader(c)
 
-	token := checkAuthorizationHeader(c, userID)
-
-	// Realizar la solicitud GET al servidor de archivos para obtener todos los documentos
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", FILES_SERVER+"/"+userID+"/_all_docs", nil)
+	client, err := createTLSClient(FILES_CERT)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create request"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	req.Header.Add("Authorization", "token "+token)
-
-	resp, err := client.Do(req)
+	resp, err := makeHTTPRequest(client, "GET", FILES_SERVER+"/"+user_id+"/_all_docs", token, nil)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send request to file server"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error en Auth Server"})
-		return
-	}
-
-	var respData map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decode response from file server"})
-		return
-	}
-
-	c.JSON(http.StatusOK, respData)
+	handleHTTPResponse(c, resp)
 }
 
 func main() {
@@ -386,7 +294,7 @@ func main() {
 	user := User{}
 	docs := Docs{}
 
-	router.GET("/version", version.version)
+	router.GET("/version", version.get)
 	router.POST("/signup", signup.post)
 	router.POST("/login", login.post)
 	router.GET("/:user_id/:doc_id", user.get)
@@ -395,5 +303,6 @@ func main() {
 	router.DELETE("/:user_id/:doc_id", user.delete)
 	router.GET("/:user_id/_all_docs", docs.get)
 
-	log.Fatal(router.RunTLS(":443", CERT, KEY))
+	address := fmt.Sprintf("%s:%s", IP_HOST, PORT)
+	log.Fatal(router.RunTLS(address, CERT_PEM, KEY_PEM))
 }

@@ -7,7 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -22,59 +24,94 @@ const (
 	USERS_PATH      = "users/"
 	SHADOW_FILE     = ".shadow"
 	TIME_EXPIRATION = 5
+	KEY_PEM         = "keys/auth-key.pem"
+	IP_HOST         = "10.0.2.3"
+	PORT            = "5000"
+	CERT            = "certs/auth-cert.pem"
 	KEY             = "b70a82b92875605defbeda92cfdabf0362aa4cac8e784b6445f2726a8a54abc0"
 )
 
 var TOKENS_DICT = make(map[string]string)
+
+type Credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
 
 type Signup struct{}
 type Login struct{}
 type Authorize struct{}
 
 func verifyUser(username string) bool {
-	_, exists := TOKENS_DICT[username]
-	return exists
+	for user := range TOKENS_DICT {
+		if username == user {
+			return true
+		}
+	}
+	return false
 }
 
-func verifyToken(username, tokenString string) (bool, error) {
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+func verifyToken(username, token string) bool {
+	// Parse the token
+	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		// Check the signing method
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("Unexpected signing method: %v", token.Header[""])
+			return nil, fmt.Errorf("Invalid signing method")
 		}
-		return KEY, nil
+		return []byte(KEY), nil
 	})
 
-	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		if exp, ok := claims["exp"].(float64); ok {
-			dateExpired := time.Unix(int64(exp), 0)
-			if dateExpired.Before(time.Now()) {
-				return false, fmt.Errorf("token expired")
-			}
+	// Handle token parsing errors
+	if err != nil {
+		fmt.Println("Error:", err)
+		return false
+	}
+
+	// Check if the token is valid
+	if parsedToken.Valid {
+		// Check token claims
+		claims, ok := parsedToken.Claims.(jwt.MapClaims)
+		if !ok {
+			fmt.Println("Invalid token claims")
+			return false
 		}
 
-		if claims["username"] != username {
-			return false, fmt.Errorf("Username does not match the token")
+		// Check if the username matches the token
+		if claims["username"] == username {
+			// Check token expiration
+			expirationTimeUnix, ok := claims["exp"].(float64)
+			if !ok {
+				fmt.Println("Invalid expiration time")
+				return false
+			}
+
+			expirationTime := time.Unix(int64(expirationTimeUnix), 0)
+			if expirationTime.Before(time.Now()) {
+				fmt.Println("Token expired")
+				return false
+			}
+
+			return true
 		}
-		return true, nil
-	} else {
-		return false, err
+
+		fmt.Println("Username does not match the token")
+		return false
 	}
+
+	fmt.Println("Invalid token")
+	return false
 }
 
-func checkDirectories() error {
+func checkDirectories() {
+	// Comprobar si el directorio de usuarios existe
 	if _, err := os.Stat(USERS_PATH); os.IsNotExist(err) {
-		if err := os.Mkdir(USERS_PATH, 0755); err != nil {
-			return err
-		}
+		os.Mkdir(USERS_PATH, os.ModeDir)
 	}
+
+	// Comprobar si el archivo de sombra (shadow file) existe
 	if _, err := os.Stat(".shadow"); os.IsNotExist(err) {
-		file, err := os.Create(".shadow")
-		if err != nil {
-			return err
-		}
-		defer file.Close()
+		os.Create(".shadow")
 	}
-	return nil
 }
 
 func encryptPassword(salt, password string) string {
@@ -87,19 +124,18 @@ func encryptPassword(salt, password string) string {
 	return hex.EncodeToString(encrypted)
 }
 
-func generateAccessToken(username string) (string, error) {
-	token := jwt.New(jwt.SigningMethodHS256)
-
-	claims := token.Claims.(jwt.MapClaims)
-	claims["username"] = username
-	claims["exp"] = time.Now().Add(time.Minute * TIME_EXPIRATION).Unix()
-
+func generateAccessToken(username string) string {
+	expirationTime := time.Now().Add(time.Duration(TIME_EXPIRATION) * time.Minute)
+	claims := jwt.MapClaims{
+		"username": username,
+		"exp":      expirationTime.Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString([]byte(KEY))
 	if err != nil {
-		return "", err
+		log.Fatal(err)
 	}
-	return tokenString, nil
-
+	return tokenString
 }
 
 func (s *Signup) checkUsername(username string) bool {
@@ -147,16 +183,10 @@ func (s *Signup) post(c *gin.Context) {
 		return
 	}
 
-	// Extract username from the JSON input
-	username, exists := jsonInput["username"]
-	if !exists {
-		c.JSON(400, gin.H{"error": "Arguments must be 'username' and 'password'"})
-		return
-	}
-	// Extract password from the JSON input
-	password, exists := jsonInput["password"]
-	if !exists {
-		c.JSON(400, gin.H{"error": "Arguments must be 'username' and 'password'"})
+	username, existsU := jsonInput["username"]
+	password, existPs := jsonInput["password"]
+	if !existPs || !existsU {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Arguments must be 'username' and 'password'"})
 		return
 	}
 
@@ -166,15 +196,13 @@ func (s *Signup) post(c *gin.Context) {
 		return
 	}
 
-	if err := s.registerUser(username, password); err != nil {
-		c.JSON(400, gin.H{"error": "Error registering user"})
-	}
-
-	token, err := generateAccessToken(username)
+	err := s.registerUser(username, password)
 	if err != nil {
-		c.JSON(400, gin.H{"error": "Error generating access token"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register user"})
+		return
 	}
 
+	token := generateAccessToken(username)
 	TOKENS_DICT[username] = token
 
 	c.JSON(200, gin.H{"access_token": token})
@@ -182,33 +210,22 @@ func (s *Signup) post(c *gin.Context) {
 }
 
 // LOGIN -> Check user credentials against a shadow file
-func (l *Login) CheckCredentials(username, password string, c *gin.Context) bool {
-	// Open shadow file
-	shadowFile, err := os.Open(SHADOW_FILE)
+func (l *Login) checkCredentials(username, password string) bool {
+	shadowFile, err := ioutil.ReadFile(".shadow")
 	if err != nil {
-		c.JSON(500, gin.H{"error": "Error opening shadow file"})
+		fmt.Println("Error reading shadow file:", err)
 		return false
 	}
-	defer shadowFile.Close()
-	// Read the contents of the file line by line
-	scanner := bufio.NewScanner(shadowFile)
-	for scanner.Scan() {
-		line := scanner.Text()
-		credentials := strings.Split(line, ":")
 
-		if credentials[0] == username {
-			// Encrypt the provided password with the stored salt from the shadow file
-			hashedPassword := encryptPassword(credentials[1], password)
-			if err != nil {
-				c.JSON(500, gin.H{"error": "Error encrypting password"})
-				return false
-			}
-			// Check if the hashed passsword matches the stored hashed password
-			if strings.TrimSpace(credentials[2]) == hashedPassword {
-				return true
-			}
+	lines := strings.Split(string(shadowFile), "\n")
+
+	for _, line := range lines {
+		credentials := strings.Split(line, ":")
+		if len(credentials) == 3 && credentials[0] == username && credentials[2] == encryptPassword(credentials[1], password) {
+			return true
 		}
 	}
+
 	return false
 }
 
@@ -222,46 +239,33 @@ func (l *Login) Login(c *gin.Context) {
 		return
 	}
 
-	// Extract username from the JSON input
-	username, exists := jsonInput["username"]
-	if !exists {
-		c.JSON(400, gin.H{"error": "Arguments must be 'username' and 'password'"})
-		return
-	}
+	username, existU := jsonInput["username"]
+	password, existP := jsonInput["password"]
 
-	// Extract password from the JSON input
-	password, exists := jsonInput["password"]
-	if !exists {
-		c.JSON(400, gin.H{"error": "Arguments must be 'username' and 'password'"})
+	if !existP || !existU {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Username and password are required"})
 		return
 	}
 
 	// Check user credentials
-	if l.CheckCredentials(username, password, c) {
+	if l.checkCredentials(username, password) {
 		// Check if the user has a token associated, if not, generate one
 		token, exists := TOKENS_DICT[username]
 		if !exists {
-			token, err := generateAccessToken(username)
-			if err != nil {
-				c.JSON(400, gin.H{"error": "Error generating access token"})
-				return
-			}
+			token := generateAccessToken(username)
 			TOKENS_DICT[username] = token
 			c.JSON(200, gin.H{"access_token": token})
 			return
 		}
 
 		// If the user has a token, check its expiration date
-		valid, err := verifyToken(username, token)
-		if err != nil || !valid {
-			token, err := generateAccessToken(username)
-			if err != nil {
-				c.JSON(400, gin.H{"error": "Error generating access token"})
-				return
-			}
+		if verifyToken(username, token) {
+			c.JSON(http.StatusOK, gin.H{"access_token": TOKENS_DICT[username]})
+		} else {
+			delete(TOKENS_DICT, username)
+			token = generateAccessToken(username)
 			TOKENS_DICT[username] = token
-			c.JSON(200, gin.H{"access_token": token})
-			return
+			c.JSON(http.StatusOK, gin.H{"access_token": token})
 		}
 	} else {
 		c.JSON(401, gin.H{"error": "Error, user or password incorrect"})
@@ -274,11 +278,7 @@ func (a *Authorize) authorize(c *gin.Context) {
 
 	if verifyUser(username) {
 
-		valid, err := verifyToken(username, token)
-		if err != nil {
-			c.JSON(400, gin.H{"error": "Error verifying token"})
-		}
-		if valid {
+		if verifyToken(username, token) {
 			c.JSON(200, gin.H{})
 		} else {
 			c.JSON(400, gin.H{"error": "Wrong token"})
@@ -301,16 +301,12 @@ func main() {
 	// Set up gin router
 	router := gin.Default()
 
-	// Use the Middlware for all routes that requires authorization
-
 	// Define Endpoints
 	router.POST("/login", login.Login)
-	router.GET("/authorize", auth.authorize)
+	router.GET("/checking", auth.authorize)
 	router.POST("/signup", singup.post)
 
 	// Run gin server
-	err := router.RunTLS("myserver.local:5000", "cert/cert.pem", "cert/key.pem")
-	if err != nil {
-		log.Fatalf("Failed to start server: %v", err)
-	}
+	address := fmt.Sprintf("%s:%s", IP_HOST, PORT)
+	router.RunTLS(address, CERT, KEY_PEM)
 }

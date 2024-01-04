@@ -24,10 +24,10 @@ const (
 	USERS_PATH      = "users/"
 	SHADOW_FILE     = ".shadow"
 	TIME_EXPIRATION = 5
-	KEY_PEM         = "keys/auth-key.pem"
+	KEY_PEM         = "keys/auth.key.ssl.key"
 	IP_HOST         = "10.0.2.3"
 	PORT            = "5000"
-	CERT            = "certs/auth-cert.pem"
+	CERT            = "certs/auth-cert.ssl.crt"
 	KEY             = "b70a82b92875605defbeda92cfdabf0362aa4cac8e784b6445f2726a8a54abc0"
 )
 

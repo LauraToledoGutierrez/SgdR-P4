@@ -28,7 +28,7 @@ const (
 	CERT        = "certs/file-cert.pem"
 	AUTH_SERVER = "https://10.0.2.3:5000/"
 	AUTH_CERT   = "certs/auth.ssl.crt"
-	KEY         = "keys/file-csr.pem"
+	KEY         = "keys/file-key.pem"
 	IP_HOST     = "10.0.2.4"
 	PORT        = "5000"
 )
@@ -382,6 +382,9 @@ func (ud *UserDir) post(c *gin.Context) {
 }
 
 func main() {
+
+	fmt.Println("Practica 4 - Laura Toledo Gutierrez")
+
 	user := User{}
 	docs := Docs{}
 	userDir := UserDir{}

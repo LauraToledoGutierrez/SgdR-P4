@@ -286,6 +286,9 @@ func (d *Docs) get(c *gin.Context) {
 }
 
 func main() {
+
+	fmt.Println("Practica 4 - Laura Toledo Gutierrez")
+
 	router := gin.Default()
 
 	version := Version{}

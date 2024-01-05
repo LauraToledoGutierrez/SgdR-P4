@@ -24,11 +24,11 @@ const (
 	USERS_PATH      = "users/"
 	SHADOW_FILE     = ".shadow"
 	TIME_EXPIRATION = 5
-	KEY_PEM         = "keys/auth.key.ssl.key"
+	KEY_PEM         = "keys/auth-key.ssl.key"
 	IP_HOST         = "10.0.2.3"
 	PORT            = "5000"
 	CERT            = "certs/auth-cert.ssl.crt"
-	KEY             = "b70a82b92875605defbeda92cfdabf0362aa4cac8e784b6445f2726a8a54abc0"
+	KEY             = "7ce0bf4f88489514ce006f3efe0867076fd1717346e76c1db4f9665d938ce858"
 )
 
 var TOKENS_DICT = make(map[string]string)
@@ -158,7 +158,7 @@ func (s *Signup) checkUsername(username string) bool {
 	return false
 }
 
-func (s *Signup) registerUser(username, password string) error {
+func (s *Signup) registerUser(username string, password string) error {
 	shadowFile, err := os.OpenFile(SHADOW_FILE, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return err
@@ -209,28 +209,33 @@ func (s *Signup) post(c *gin.Context) {
 
 }
 
-// LOGIN -> Check user credentials against a shadow file
 func (l *Login) checkCredentials(username, password string) bool {
 	shadowFile, err := ioutil.ReadFile(".shadow")
 	if err != nil {
-		fmt.Println("Error reading shadow file:", err)
+		fmt.Printf("Error reading shadow file: %v\n", err)
 		return false
 	}
 
 	lines := strings.Split(string(shadowFile), "\n")
-
 	for _, line := range lines {
 		credentials := strings.Split(line, ":")
-		if len(credentials) == 3 && credentials[0] == username && credentials[2] == encryptPassword(credentials[1], password) {
+		if len(credentials) != 3 {
+			fmt.Println("Skipping malformed line in shadow file")
+			continue
+		}
+		hashedPassword := encryptPassword(credentials[1], password)
+		if credentials[0] == username && credentials[2] == hashedPassword {
+			fmt.Println("Credentials verified successfully")
 			return true
 		}
 	}
 
+	fmt.Println("Credentials verification failed")
 	return false
 }
 
-// LOGIN -> Hadle user login
-func (l *Login) Login(c *gin.Context) {
+// LOGIN -> Hadle user post
+func (l *Login) post(c *gin.Context) {
 	// Parse JSON input from the request body
 	var jsonInput map[string]string
 
@@ -252,7 +257,7 @@ func (l *Login) Login(c *gin.Context) {
 		// Check if the user has a token associated, if not, generate one
 		token, exists := TOKENS_DICT[username]
 		if !exists {
-			token := generateAccessToken(username)
+			token = generateAccessToken(username)
 			TOKENS_DICT[username] = token
 			c.JSON(200, gin.H{"access_token": token})
 			return
@@ -302,7 +307,7 @@ func main() {
 	router := gin.Default()
 
 	// Define Endpoints
-	router.POST("/login", login.Login)
+	router.POST("/login", login.post)
 	router.GET("/checking", auth.authorize)
 	router.POST("/signup", singup.post)
 

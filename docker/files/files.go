@@ -25,10 +25,10 @@ const (
 	SHADOW_FILE     = ".shadow"
 	TIME_EXPIRATION = 5
 	// FALTA PONER CERTIFICADO
-	CERT        = "certs/file-cert.pem"
+	CERT        = "certs/files-cert.ssl.crt"
 	AUTH_SERVER = "https://10.0.2.3:5000/"
-	AUTH_CERT   = "certs/auth.ssl.crt"
-	KEY         = "keys/file-key.pem"
+	AUTH_CERT   = "certs/auth-cert.ssl.crt"
+	KEY         = "keys/files-key.ssl.key"
 	IP_HOST     = "10.0.2.4"
 	PORT        = "5000"
 )
@@ -143,7 +143,6 @@ func (u *User) get(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, data)
-
 }
 
 func (u *User) post(c *gin.Context) {
@@ -164,7 +163,17 @@ func (u *User) post(c *gin.Context) {
 		return
 	}
 
-	if _, err := os.Stat(USERS_PATH + userID + "/" + docID + ".json"); !os.IsNotExist(err) {
+	// Verificación y creación del directorio
+	dirPath := USERS_PATH + userID
+	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to create directory"})
+			return
+		}
+	}
+
+	jsonFileName := dirPath + "/" + docID + ".json"
+	if _, err := os.Stat(jsonFileName); !os.IsNotExist(err) {
 		c.JSON(405, gin.H{"message": "The file already exists, use put to update"})
 		return
 	}
@@ -183,8 +192,6 @@ func (u *User) post(c *gin.Context) {
 		return
 	}
 
-	// Construct the file path for the JSON file
-	jsonFileName := USERS_PATH + userID + "/" + docID + ".json"
 	// Marshal the document content to JSON format
 	jsonString, err := json.Marshal(docContent)
 	if err != nil {
@@ -195,7 +202,7 @@ func (u *User) post(c *gin.Context) {
 	// Write the JSON content to the file
 	err = ioutil.WriteFile(jsonFileName, jsonString, 0644)
 	if err != nil {
-		c.JSON(500, gin.H{"message": "Internal server error"})
+		c.JSON(500, gin.H{"message": err.Error()})
 		return
 	}
 

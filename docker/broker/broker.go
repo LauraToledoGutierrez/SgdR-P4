@@ -21,7 +21,7 @@ const (
 	IP_HOST      = "10.0.1.4"
 	PORT         = "5000"
 	FILES_SERVER = "https://10.0.2.4:5000"
-	FILES_CERT   = "certs/file-cert.ssl.crt"
+	FILES_CERT   = "certs/files-cert.ssl.crt"
 	AUTH_SERVER  = "https://10.0.2.3:5000"
 	AUTH_CERT    = "certs/auth-cert.ssl.crt"
 	CERT_PEM     = "certs/broker-cert.ssl.crt"
@@ -123,7 +123,7 @@ func (s *Signup) post(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	resp, err := makeHTTPRequest(client, "POST", AUTH_SERVER, "", requestData)
+	resp, err := makeHTTPRequest(client, "POST", AUTH_SERVER+"/signup", "", requestData)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -151,7 +151,7 @@ func (l *Login) post(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	resp, err := makeHTTPRequest(client, "GET", AUTH_SERVER, "", requestData)
+	resp, err := makeHTTPRequest(client, "POST", AUTH_SERVER+"/login", "", requestData)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -275,7 +275,7 @@ func (d *Docs) get(c *gin.Context) {
 		return
 	}
 
-	resp, err := makeHTTPRequest(client, "GET", FILES_SERVER+"/"+user_id+"/_all_docs", token, nil)
+	resp, err := makeHTTPRequest(client, "GET", FILES_SERVER+"/alldocs/"+user_id+"", token, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -304,7 +304,7 @@ func main() {
 	router.POST("/:user_id/:doc_id", user.post)
 	router.PUT("/:user_id/:doc_id", user.put)
 	router.DELETE("/:user_id/:doc_id", user.delete)
-	router.GET("/:user_id/_all_docs", docs.get)
+	router.GET("/alldocs/:user_id", docs.get)
 
 	address := fmt.Sprintf("%s:%s", IP_HOST, PORT)
 	log.Fatal(router.RunTLS(address, CERT_PEM, KEY_PEM))

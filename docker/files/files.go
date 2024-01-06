@@ -14,9 +14,7 @@ import (
 	"strings"
 	"time"
 
-	//go get github.com/dgrijalva/jwt-go
 	"github.com/gin-gonic/gin" //go get github.com/gin-gonic/gin
-	//go get github.com/google/uuid
 )
 
 const (
@@ -24,13 +22,12 @@ const (
 	USERS_PATH      = "users/"
 	SHADOW_FILE     = ".shadow"
 	TIME_EXPIRATION = 5
-	// FALTA PONER CERTIFICADO
-	CERT        = "certs/files-cert.ssl.crt"
-	AUTH_SERVER = "https://10.0.2.3:5000/"
-	AUTH_CERT   = "certs/auth-cert.ssl.crt"
-	KEY         = "keys/files-key.ssl.key"
-	IP_HOST     = "10.0.2.4"
-	PORT        = "5000"
+	CERT            = "certs/files-cert.ssl.crt"
+	AUTH_SERVER     = "https://10.0.2.3:5000/"
+	AUTH_CERT       = "certs/auth-cert.ssl.crt"
+	KEY             = "keys/files-key.ssl.key"
+	IP_HOST         = "10.0.2.4"
+	PORT            = "5000"
 )
 
 var TOKENS_DICT = make(map[string]string)
@@ -42,12 +39,17 @@ type User struct{}
 type Docs struct{}
 type UserDir struct{}
 
+// AUXILIARY FUNCTIONS
+
+// Verify and process the authorization header in an http request
 func checkAuthorizationHeader(c *gin.Context) string {
+	// Obtain the value of authorization header
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Authorization header is required"})
 		return ""
 	}
+	// Divide the authorization header into its parts using a black space as a delimiter
 	headerParts := strings.Split(authHeader, " ")
 	if len(headerParts) != 2 || headerParts[0] != "token" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Authorization header must be: token <user-auth-token"})
@@ -56,11 +58,14 @@ func checkAuthorizationHeader(c *gin.Context) string {
 	return headerParts[1]
 }
 
+// Create a HTTP client that uses a custom TLS certificate to make secure requests over HTTPS
 func createTLSClient(certFile string) (*http.Client, error) {
+	// Read the certificate
 	caCert, err := ioutil.ReadFile(certFile)
 	if err != nil {
 		return nil, err
 	}
+	// Create a certificate pool and add the contets of the certificate files to this pool
 	caCertPool := x509.NewCertPool()
 	caCertPool.AppendCertsFromPEM(caCert)
 	tlsConfig := &tls.Config{RootCAs: caCertPool}
@@ -70,23 +75,29 @@ func createTLSClient(certFile string) (*http.Client, error) {
 	}, nil
 }
 
+// Make a HTTP request using a custom HTTP client
 func makeHTTPRequest(client *http.Client, method, url string, token string, body []byte) (*http.Response, error) {
+	// Create a new request
 	req, err := http.NewRequest(method, url, bytes.NewBuffer(body))
 	if err != nil {
 		return nil, err
 	}
+	// Configure the request header
 	req.Header.Set("Authorization", "token "+token)
 	req.Header.Set("Content-Type", "application/json")
+	// Make the HTTP request
 	return client.Do(req)
 }
 
+// Handle the HTTP response
 func handleHTTPResponse(c *gin.Context, resp *http.Response) {
+	// Read the HTTP response body
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
+	// Respond to the client according to the status code
 	if resp.StatusCode == http.StatusOK {
 		var result map[string]interface{}
 		if err := json.Unmarshal(body, &result); err != nil {
@@ -104,31 +115,34 @@ func handleHTTPResponse(c *gin.Context, resp *http.Response) {
 	}
 }
 
+// USER -> GET user data based on user id and document id
 func (u *User) get(c *gin.Context) {
+	// Extract user id and document id from the request parameters
 	userID := c.Param("user_id")
 	docID := c.Param("doc_id")
 
 	token := checkAuthorizationHeader(c)
 
-	// Realizar solicitud de verificación de token al servidor AUTH
+	// Create HTTP client with TLS certificate
 	client, err := createTLSClient(AUTH_CERT)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
+	// Make the request token verification to the authentication server
 	resp, err := makeHTTPRequest(client, "GET", AUTH_SERVER+"checking", token, nil)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token is not correct"})
 		return
 	}
 
+	// Create json name
 	jsonFileName := USERS_PATH + userID + "/" + docID + ".json"
 	if _, err := os.Stat(jsonFileName); os.IsNotExist(err) {
 		c.JSON(http.StatusNotFound, gin.H{"message": "The file does not exist"})
 		return
 	}
-
+	// Open json file
 	jsonFile, err := os.Open(jsonFileName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal Server Error"})
@@ -136,6 +150,7 @@ func (u *User) get(c *gin.Context) {
 	}
 	defer jsonFile.Close()
 
+	// Read and decode json
 	var data interface{}
 	decoder := json.NewDecoder(jsonFile)
 	if err := decoder.Decode(&data); err != nil {
@@ -145,25 +160,28 @@ func (u *User) get(c *gin.Context) {
 	c.JSON(http.StatusOK, data)
 }
 
+// USER -> Post, handle creating a new document for a user
 func (u *User) post(c *gin.Context) {
 	userID := c.Param("user_id")
 	docID := c.Param("doc_id")
 
 	token := checkAuthorizationHeader(c)
 
+	// Create HTTP client with TLS certificate
 	client, err := createTLSClient(AUTH_CERT)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	// Make the request token verification to the authentication server
 	resp, err := makeHTTPRequest(client, "GET", AUTH_SERVER+"checking", token, nil)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token is not correct"})
 		return
 	}
 
-	// Verificación y creación del directorio
+	// Verify and create directory
 	dirPath := USERS_PATH + userID
 	if _, err := os.Stat(dirPath); os.IsNotExist(err) {
 		if err := os.MkdirAll(dirPath, 0755); err != nil {
@@ -172,6 +190,7 @@ func (u *User) post(c *gin.Context) {
 		}
 	}
 
+	// Construct the file path for the json file
 	jsonFileName := dirPath + "/" + docID + ".json"
 	if _, err := os.Stat(jsonFileName); !os.IsNotExist(err) {
 		c.JSON(405, gin.H{"message": "The file already exists, use put to update"})
@@ -215,6 +234,7 @@ func (u *User) post(c *gin.Context) {
 	c.JSON(200, gin.H{"size": fileInfo.Size()})
 }
 
+// USER -> Put, handle updating the content of an existing document for a user
 func (u *User) put(c *gin.Context) {
 
 	userID := c.Param("user_id")
@@ -222,12 +242,14 @@ func (u *User) put(c *gin.Context) {
 
 	token := checkAuthorizationHeader(c)
 
+	// Create HTTP client with TLS certificate
 	client, err := createTLSClient(AUTH_CERT)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	// Make the request token verification to the authentication server
 	resp, err := makeHTTPRequest(client, "GET", AUTH_SERVER+"checking", token, nil)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token is not correct"})
@@ -292,18 +314,21 @@ func (u *User) put(c *gin.Context) {
 	c.JSON(200, gin.H{"size": fileInfo.Size()})
 }
 
+// USER -> Delete, handle deleting a document for a user
 func (u *User) delete(c *gin.Context) {
 	userID := c.Param("user_id")
 	docID := c.Param("doc_id")
 
 	token := checkAuthorizationHeader(c)
 
+	// Create HTTP client with TLS certificate
 	client, err := createTLSClient(AUTH_CERT)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	// Make the request token verification to the authentication server
 	resp, err := makeHTTPRequest(client, "GET", AUTH_SERVER+"checking", token, nil)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Token is not correct"})
@@ -317,6 +342,7 @@ func (u *User) delete(c *gin.Context) {
 		return
 	}
 
+	// Remove the file
 	err = os.Remove(jsonFilePath)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Failed to delete file"})
@@ -326,17 +352,19 @@ func (u *User) delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{})
 }
 
+// ALLDOCS -> GET, hadle retrieving all documents for a user
 func (d *Docs) get(c *gin.Context) {
 	userID := c.Param("user_id")
 
 	token := checkAuthorizationHeader(c)
 
+	// Create HTTP client with TLS certificate
 	client, err := createTLSClient(AUTH_CERT)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
+	// Make the request token verification to the authentication server
 	resp, err := makeHTTPRequest(client, "GET", AUTH_SERVER+"checking", token, nil)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		c.JSON(resp.StatusCode, gin.H{"error": "Token is not correct"})
@@ -349,7 +377,7 @@ func (d *Docs) get(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Internal server error"})
 		return
 	}
-
+	// Browse through all files in the user's document directory
 	for _, entry := range path {
 		fileName := entry.Name()
 		filePath := fmt.Sprintf("%s%s/%s", USERS_PATH, userID, fileName)
@@ -365,7 +393,7 @@ func (d *Docs) get(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"message": "Internal server error"})
 			return
 		}
-
+		// Add the document content to the map of all documents
 		allDocs[fileName[:len(fileName)-len(filepath.Ext(fileName))]] = docContent
 	}
 
@@ -387,26 +415,28 @@ func (ud *UserDir) post(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "User directory created"})
 }
-
 func main() {
 
 	fmt.Println("Practica 4 - Laura Toledo Gutierrez")
 
+	// Define instances
 	user := User{}
 	docs := Docs{}
-	userDir := UserDir{}
 
+	// Set up gin router
 	router := gin.Default()
 
+	// Define Endpoints
 	router.GET("/:user_id/:doc_id", user.get)
 	router.POST("/:user_id/:doc_id", user.post)
 	router.PUT("/:user_id/:doc_id", user.put)
 	router.DELETE("/:user_id/:doc_id", user.delete)
 	router.GET("/alldocs/:user_id", docs.get)
-	//ESTO HAY QUE MIRARLO
+
+	userDir := UserDir{}
 	router.POST("/space", userDir.post)
 
-	//MIRAR ESTO MEJOR
+	// Run gin server with cert and key
 	address := fmt.Sprintf("%s:%s", IP_HOST, PORT)
 	log.Fatal(router.RunTLS(address, CERT, KEY))
 }

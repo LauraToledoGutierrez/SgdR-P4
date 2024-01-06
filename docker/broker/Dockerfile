@@ -1,7 +1,6 @@
 # Utilizar la imagen de Go como base
 FROM golang:1.20.3-buster AS builder
 
-
 # Configurar el directorio de trabajo en el contenedor
 WORKDIR /app
 
@@ -38,11 +37,10 @@ RUN chmod -R 644 /certs && \
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Exponer el puerto necesario para tu aplicación (ajustar según sea necesario)
+# Exponer el puerto 
 EXPOSE 5000
 
 CMD [ "/main" ]
-
 
 # Configurar el punto de entrada para iniciar la aplicación
 ENTRYPOINT ["/bin/bash", "/entrypoint.sh"]

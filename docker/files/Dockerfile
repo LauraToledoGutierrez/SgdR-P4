@@ -36,7 +36,7 @@ RUN chmod -R 644 /certs && \
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Exponer el puerto necesario para tu aplicación (ajustar según sea necesario)
+# Exponer el puerto 
 EXPOSE 5000
 
 CMD [ "/main" ]

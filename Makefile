@@ -52,6 +52,15 @@ containers: build network
 		--add-host files:10.0.2.4 \
 		--add-host broker:10.0.1.4 \
 		debian-work
+
+	docker run --privileged -ti -d --name logs --hostname logs \
+		--network dev --ip 10.0.3.4 \
+		--add-host jump:10.0.1.3 \
+		--add-host auth:10.0.2.3 \
+		--add-host files:10.0.2.4 \
+		--add-host work:10.0.3.3 \
+		--add-host broker:10.0.1.4 \
+		debian-logs
 	
 	
 build:
@@ -63,6 +72,7 @@ build:
 	docker build --rm -f docker/auth/Dockerfile --tag debian-auth docker/auth/
 	docker build --rm -f docker/files/Dockerfile --tag debian-files docker/files/
 	docker build --rm -f docker/work/Dockerfile --tag debian-work docker/work/
+	docker build --rm -f docker/logs/Dockerfile --tag debian-logs docker/logs/
 
 network:
 	@echo "***network"
@@ -71,8 +81,10 @@ network:
 	-docker network create -d bridge --subnet 10.0.3.0/24 dev
 
 remove:
-	-docker stop router work jump auth files broker
+	-docker stop router work jump auth files broker logs
 	-docker network prune -f
+	-docker image prune
+	-docker container prune
 
 run-tests:
 	@echo "***tests"

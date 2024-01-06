@@ -32,7 +32,7 @@ service rsyslog restart
 
 touch /var/log/auth.log
 
-sed -i 's/logpath = \/var\/log\/auth.log/logpath = \/var\/log\/remotelogs\/logs\/sshd.log/g' /etc/fail2ban/jail.d/defaults-debian.conf
+sed -i 's/logpath = \/var\/log\/auth.log/logpath = \/var\/log\/remotelogs\/logs\/sshd.log/g' 
 
 service ssh restart
 service rsyslog restart
